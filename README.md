@@ -51,8 +51,8 @@ what we discussed required to transfer a big proportion of our capital overseas,
 #### Cloning, nstallation & Testing
 
 ```bash
-clone x
-cd x/src
+git clone https://github.com/moeinmir/protecting-digital-assets-from-blockchain-bans-by-getting-disconnected.git 
+cd ./protecting-digital-assets-from-blockchain-bans-by-getting-disconnected/src
 npm install
 npx hardhat test
 ```
