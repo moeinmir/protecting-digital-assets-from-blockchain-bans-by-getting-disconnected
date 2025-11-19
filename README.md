@@ -1,5 +1,5 @@
 
-## Breaking the connection to protect our digital assets on public blockchains in front of banning?
+## Breaking the connection to protect our digital assets on public blockchains in front of banning
 
 ### The transaction flow
 Despite the decentralized philosophy of public blockchain, in several layers of this economic environment various entities observe transactions. If tracking the IP address lead the observer to some specific region, they may ban the account address and although addresses which did business with it. 
