@@ -44,51 +44,55 @@ what we discussed required to transfer a big proportion of our capital overseas,
 
 
 
-#### Wallet contract code
+#### Prerequisites
+- Node.js: ^22.17.0 
+- npm: Version ^10.9.2
+
+#### Cloning, nstallation & Testing
+
+```bash
+clone x
+cd x/src
+npm install
+npx hardhat test
 ```
+
+```bash
+Running node:test tests
+
+  WalletFactory + Wallet
+    ✔ Should deploy WalletFactory and create signed message for wallet creation
+    ✔ Should create wallet with correct signature
+    ✔ Should fail to create wallet with wrong signature
+    ✔ Should transfer ETH with correct signature
+    ✔ Should fail ETH transfer with incorrect signature
+
+
+  5 passing (2176ms)
+
+```
+#### Wallet contract
+```solidity
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
-contract SecureWallet {
+contract Wallet {
     using ECDSA for bytes32;
-    
-    // Public key that controls this wallet (address derived from it)
-    address public owner;
-    
-    // Events
-    event ETHTransferred(address indexed to, uint256 amount);
-    event TokenTransferred(address indexed token, address indexed to, uint256 amount);
-    event OwnershipTransferred(address indexed newOwner);
-    
-    // Modifier to check if the caller is the owner
-    modifier onlyOwner() {
-        require(msg.sender == owner, "Only owner can call this function");
-        _;
-    }
-    
-    // Constructor sets the initial owner
+    address private owner;
+
     constructor(address _owner) {
         require(_owner != address(0), "Invalid owner address");
         owner = _owner;
     }
     
-    // Receive function to accept ETH
     receive() external payable {}
     
-    // Fallback function to accept ETH
     fallback() external payable {}
     
-    /**
-     * @dev Transfer ETH using signature verification
-     * @param to Recipient address
-     * @param amount Amount of ETH to transfer
-     * @param signature ECDSA signature of the message
-     * @param tokenAddress Address(0) for ETH transfers
-     */
-    function transferWithSignature(
+    function provideSignatureWithdrawFund(
         address to,
         uint256 amount,
         bytes memory signature,
@@ -96,37 +100,23 @@ contract SecureWallet {
     ) external {
         require(to != address(0), "Invalid recipient address");
         require(amount > 0, "Amount must be greater than 0");
-        
-        // Create the message hash that should have been signed
         bytes32 messageHash = getMessageHash(to, amount, tokenAddress);
-        bytes32 ethSignedMessageHash = messageHash.toEthSignedMessageHash();
-        
-        // Recover the signer from the signature
-        address recoveredSigner = ethSignedMessageHash.recover(signature);
-        
-        // Verify the recovered signer is the owner
-        require(recoveredSigner == owner, "Invalid signature");
+        bytes32 ethSignedMessageHash = keccak256(
+            abi.encodePacked("\x19Ethereum Signed Message:\n32", messageHash)
+        );
+        address signer = ECDSA.recover(ethSignedMessageHash, signature);
+        require(signer == owner, "Invalid signature");
         
         if (tokenAddress == address(0)) {
-            // ETH transfer
             require(address(this).balance >= amount, "Insufficient ETH balance");
             payable(to).transfer(amount);
-            emit ETHTransferred(to, amount);
         } else {
-            // ERC20 token transfer
             IERC20 token = IERC20(tokenAddress);
             require(token.balanceOf(address(this)) >= amount, "Insufficient token balance");
             require(token.transfer(to, amount), "Token transfer failed");
-            emit TokenTransferred(tokenAddress, to, amount);
         }
     }
     
-    /**
-     * @dev Get the message hash that should be signed
-     * @param to Recipient address
-     * @param amount Amount to transfer
-     * @param tokenAddress Token address (address(0) for ETH)
-     */
     function getMessageHash(
         address to,
         uint256 amount,
@@ -136,254 +126,49 @@ contract SecureWallet {
             to,
             amount,
             tokenAddress,
-            address(this), // Include contract address to prevent replay attacks
-            block.chainid // Include chain ID to prevent cross-chain replay attacks
+            address(this), 
+            block.chainid
         ));
     }
     
-    /**
-     * @dev Transfer ownership to a new public key
-     * @param newOwner New owner address
-     * @param signature Signature from current owner approving the transfer
-     */
-    function transferOwnership(
-        address newOwner,
-        bytes memory signature
-    ) external {
-        require(newOwner != address(0), "Invalid new owner address");
-        
-        // Create the message hash for ownership transfer
-        bytes32 messageHash = keccak256(abi.encodePacked(
-            newOwner,
-            address(this),
-            block.chainid,
-            "transferOwnership"
-        ));
-        bytes32 ethSignedMessageHash = messageHash.toEthSignedMessageHash();
-        
-        // Recover the signer
-        address recoveredSigner = ethSignedMessageHash.recover(signature);
-        
-        // Verify the recovered signer is the current owner
-        require(recoveredSigner == owner, "Invalid signature for ownership transfer");
-        
-        // Transfer ownership
-        address oldOwner = owner;
-        owner = newOwner;
-        emit OwnershipTransferred(newOwner);
-    }
-    
-    /**
-     * @dev Get ETH balance of the contract
-     */
-    function getETHBalance() external view returns (uint256) {
-        return address(this).balance;
-    }
-    
-    /**
-     * @dev Get ERC20 token balance of the contract
-     * @param tokenAddress Address of the ERC20 token
-     */
-    function getTokenBalance(address tokenAddress) external view returns (uint256) {
-        return IERC20(tokenAddress).balanceOf(address(this));
-    }
-    
-    /**
-     * @dev Emergency function to transfer ownership (only callable by current owner)
-     * This provides a fallback if the private key is lost but the owner still has access
-     */
-    function emergencyTransferOwnership(address newOwner) external onlyOwner {
-        require(newOwner != address(0), "Invalid new owner address");
-        owner = newOwner;
-        emit OwnershipTransferred(newOwner);
+    function getOwner() public view returns (address) {
+        return owner;
     }
 }
 ```
 
-
-
-#### WalletFactory contract code
-```
+#### WalletFactory contract
+```solidity
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
-
-// Import the SecureWallet contract (assuming it's in the same project)
-import "./SecureWallet.sol";
+import "./Wallet.sol";
 
 contract WalletFactory {
-    using ECDSA for bytes32;
-    
-    // Address that can authorize wallet creation
-    address public signer;
-    
-    // Mapping to track deployed wallets for each owner
-    mapping(address => address) public ownerToWallet;
-    
-    // Mapping to check if a wallet address was deployed by this factory
-    mapping(address => bool) public isWalletDeployedByFactory;
-    
-    // Counter for nonce to prevent replay attacks
-    mapping(address => uint256) public nonces;
-    
-    // Events
-    event WalletCreated(address indexed owner, address indexed walletAddress);
-    event SignerChanged(address indexed newSigner);
-    
-    // Modifier to check if caller is the current signer
-    modifier onlySigner() {
-        require(msg.sender == signer, "Only signer can call this function");
-        _;
-    }
-    
-    /**
-     * @dev Constructor sets the initial signer
-     * @param _signer Address that will sign wallet creation requests
-     */
+    address private signer;
+
     constructor(address _signer) {
         require(_signer != address(0), "Invalid signer address");
         signer = _signer;
     }
     
-    /**
-     * @dev Create a new wallet for the specified owner using signature verification
-     * @param owner Address that will own the new wallet
-     * @param signature ECDSA signature authorizing wallet creation
-     */
     function createWallet(
         address owner,
-        bytes memory signature
-    ) external returns (address walletAddress) {
-        require(owner != address(0), "Invalid owner address");
-        require(ownerToWallet[owner] == address(0), "Wallet already exists for this owner");
-        
-        // Create the message hash that should have been signed
-        bytes32 messageHash = getCreateWalletMessageHash(owner);
-        bytes32 ethSignedMessageHash = messageHash.toEthSignedMessageHash();
-        
-        // Recover the signer from the signature
-        address recoveredSigner = ethSignedMessageHash.recover(signature);
-        
-        // Verify the recovered signer is the authorized signer
-        require(recoveredSigner == signer, "Invalid signature for wallet creation");
-        
-        // Deploy the new wallet
-        walletAddress = address(new SecureWallet(owner));
-        
-        // Update mappings
-        ownerToWallet[owner] = walletAddress;
-        isWalletDeployedByFactory[walletAddress] = true;
-        nonces[owner]++;
-        
-        emit WalletCreated(owner, walletAddress);
-        
-        return walletAddress;
-    }
-    
-    /**
-     * @dev Create a new wallet with salt for deterministic address
-     * @param owner Address that will own the new wallet
-     * @param signature ECDSA signature authorizing wallet creation
-     * @param salt Salt for deterministic deployment
-     */
-    function createWalletDeterministic(
-        address owner,
         bytes memory signature,
         bytes32 salt
     ) external returns (address walletAddress) {
         require(owner != address(0), "Invalid owner address");
-        require(ownerToWallet[owner] == address(0), "Wallet already exists for this owner");
-        
-        // Create the message hash that should have been signed (include salt for uniqueness)
         bytes32 messageHash = getCreateWalletMessageHashWithSalt(owner, salt);
-        bytes32 ethSignedMessageHash = messageHash.toEthSignedMessageHash();
-        
-        // Recover the signer from the signature
-        address recoveredSigner = ethSignedMessageHash.recover(signature);
-        
-        // Verify the recovered signer is the authorized signer
+        bytes32 ethSignedMessageHash = keccak256(
+            abi.encodePacked("\x19Ethereum Signed Message:\n32", messageHash)
+        );
+        address recoveredSigner = ECDSA.recover(ethSignedMessageHash, signature);
         require(recoveredSigner == signer, "Invalid signature for wallet creation");
-        
-        // Deploy the new wallet with CREATE2 for deterministic address
-        walletAddress = address(new SecureWallet{salt: salt}(owner));
-        
-        // Update mappings
-        ownerToWallet[owner] = walletAddress;
-        isWalletDeployedByFactory[walletAddress] = true;
-        nonces[owner]++;
-        
-        emit WalletCreated(owner, walletAddress);
-        
+        walletAddress = address(new Wallet{salt: salt}(owner));
         return walletAddress;
     }
     
-    /**
-     * @dev Batch create multiple wallets
-     * @param owners Array of owner addresses
-     * @param signatures Array of signatures for each owner
-     */
-    function createWalletsBatch(
-        address[] memory owners,
-        bytes[] memory signatures
-    ) external returns (address[] memory) {
-        require(owners.length == signatures.length, "Arrays length mismatch");
-        require(owners.length > 0, "Empty arrays");
-        require(owners.length <= 50, "Too many wallets in batch"); // Prevent gas limits
-        
-        address[] memory deployedWallets = new address[](owners.length);
-        
-        for (uint256 i = 0; i < owners.length; i++) {
-            address owner = owners[i];
-            require(owner != address(0), "Invalid owner address");
-            require(ownerToWallet[owner] == address(0), "Wallet already exists for this owner");
-            
-            // Create the message hash that should have been signed
-            bytes32 messageHash = getCreateWalletMessageHash(owner);
-            bytes32 ethSignedMessageHash = messageHash.toEthSignedMessageHash();
-            
-            // Recover the signer from the signature
-            address recoveredSigner = ethSignedMessageHash.recover(signatures[i]);
-            
-            // Verify the recovered signer is the authorized signer
-            require(recoveredSigner == signer, "Invalid signature for wallet creation");
-            
-            // Deploy the new wallet
-            address walletAddress = address(new SecureWallet(owner));
-            
-            // Update mappings
-            ownerToWallet[owner] = walletAddress;
-            isWalletDeployedByFactory[walletAddress] = true;
-            nonces[owner]++;
-            
-            deployedWallets[i] = walletAddress;
-            emit WalletCreated(owner, walletAddress);
-        }
-        
-        return deployedWallets;
-    }
-    
-    /**
-     * @dev Get the message hash that should be signed for wallet creation
-     * @param owner The owner address for the new wallet
-     */
-    function getCreateWalletMessageHash(
-        address owner
-    ) public view returns (bytes32) {
-        return keccak256(abi.encodePacked(
-            owner,
-            address(this),
-            block.chainid,
-            nonces[owner],
-            "createWallet"
-        ));
-    }
-    
-    /**
-     * @dev Get the message hash that should be signed for deterministic wallet creation
-     * @param owner The owner address for the new wallet
-     * @param salt The salt for deterministic deployment
-     */
     function getCreateWalletMessageHashWithSalt(
         address owner,
         bytes32 salt
@@ -392,200 +177,12 @@ contract WalletFactory {
             owner,
             salt,
             address(this),
-            block.chainid,
-            nonces[owner],
-            "createWalletDeterministic"
+            block.chainid
         ));
     }
     
-    /**
-     * @dev Predict the address of a wallet that would be deployed deterministically
-     * @param owner The owner address for the wallet
-     * @param salt The salt for deterministic deployment
-     */
-    function predictWalletAddress(
-        address owner,
-        bytes32 salt
-    ) public view returns (address) {
-        bytes memory bytecode = type(SecureWallet).creationCode;
-        bytes memory constructorArgs = abi.encode(owner);
-        bytes memory creationCode = abi.encodePacked(bytecode, constructorArgs);
-        
-        bytes32 hash = keccak256(
-            abi.encodePacked(
-                bytes1(0xff),
-                address(this),
-                salt,
-                keccak256(creationCode)
-            )
-        );
-        
-        return address(uint160(uint256(hash)));
-    }
-    
-    /**
-     * @dev Get wallet address for an owner
-     * @param owner The owner address
-     */
-    function getWalletForOwner(address owner) external view returns (address) {
-        return ownerToWallet[owner];
-    }
-    
-    /**
-     * @dev Check if a wallet was deployed by this factory
-     * @param walletAddress The wallet address to check
-     */
-    function isDeployedByFactory(address walletAddress) external view returns (bool) {
-        return isWalletDeployedByFactory[walletAddress];
-    }
-    
-    /**
-     * @dev Change the signer address (only callable by current signer)
-     * @param newSigner The new signer address
-     */
-    function changeSigner(address newSigner) external onlySigner {
-        require(newSigner != address(0), "Invalid signer address");
-        signer = newSigner;
-        emit SignerChanged(newSigner);
-    }
-    
-    /**
-     * @dev Get the current nonce for an owner
-     * @param owner The owner address
-     */
-    function getNonce(address owner) external view returns (uint256) {
-        return nonces[owner];
+    function getSigner() public view returns (address) {
+        return signer;
     }
 }
 ```
-#### WalletSignatureHelper contract code
-```
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
-
-import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
-
-contract SignatureHelper {
-    using ECDSA for bytes32;
-    
-    /**
-     * @dev Generate the message hash that should be signed for a transfer
-     */
-    function getTransferMessageHash(
-        address to,
-        uint256 amount,
-        address tokenAddress,
-        address walletAddress,
-        uint256 chainId
-    ) public pure returns (bytes32) {
-        return keccak256(abi.encodePacked(
-            to,
-            amount,
-            tokenAddress,
-            walletAddress,
-            chainId
-        ));
-    }
-    
-    /**
-     * @dev Generate the message hash that should be signed for ownership transfer
-     */
-    function getOwnershipTransferMessageHash(
-        address newOwner,
-        address walletAddress,
-        uint256 chainId
-    ) public pure returns (bytes32) {
-        return keccak256(abi.encodePacked(
-            newOwner,
-            walletAddress,
-            chainId,
-            "transferOwnership"
-        ));
-    }
-    
-    /**
-     * @dev Get the ETH signed message hash (what actually gets signed)
-     */
-    function getEthSignedMessageHash(bytes32 messageHash) public pure returns (bytes32) {
-        return messageHash.toEthSignedMessageHash();
-    }
-}
-```
-
-#### WalletFactorySignatureHelper contract code
-
-```
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
-
-import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
-
-contract WalletFactorySignatureHelper {
-    using ECDSA for bytes32;
-    
-    /**
-     * @dev Generate the message hash for wallet creation
-     */
-    function getCreateWalletMessageHash(
-        address owner,
-        address factoryAddress,
-        uint256 chainId,
-        uint256 nonce
-    ) public pure returns (bytes32) {
-        return keccak256(abi.encodePacked(
-            owner,
-            factoryAddress,
-            chainId,
-            nonce,
-            "createWallet"
-        ));
-    }
-    
-    /**
-     * @dev Generate the message hash for deterministic wallet creation
-     */
-    function getCreateWalletMessageHashWithSalt(
-        address owner,
-        bytes32 salt,
-        address factoryAddress,
-        uint256 chainId,
-        uint256 nonce
-    ) public pure returns (bytes32) {
-        return keccak256(abi.encodePacked(
-            owner,
-            salt,
-            factoryAddress,
-            chainId,
-            nonce,
-            "createWalletDeterministic"
-        ));
-    }
-    
-    /**
-     * @dev Get the ETH signed message hash (what actually gets signed)
-     */
-    function getEthSignedMessageHash(bytes32 messageHash) public pure returns (bytes32) {
-        return messageHash.toEthSignedMessageHash();
-    }
-    
-    /**
-     * @dev Verify a signature for wallet creation
-     */
-    function verifyCreateWalletSignature(
-        address owner,
-        address factoryAddress,
-        uint256 chainId,
-        uint256 nonce,
-        bytes memory signature,
-        address expectedSigner
-    ) public pure returns (bool) {
-        bytes32 messageHash = getCreateWalletMessageHash(owner, factoryAddress, chainId, nonce);
-        bytes32 ethSignedMessageHash = messageHash.toEthSignedMessageHash();
-        address recoveredSigner = ethSignedMessageHash.recover(signature);
-        
-        return recoveredSigner == expectedSigner;
-    }
-}
-```
-
-
